@@ -1,0 +1,422 @@
+---
+title: "RAproject"
+author: "Jennifer and Henri "
+date: "2022-12-03"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+Questions:
+is there a difference in inflation and salary inflation?
+
+
+
+
+#Description
+
+The 2008-09 nine-month academic salary for Assistant Professors, Associate Professors and Professors in a college in the U.S. The data were collected as part of the on-going effort of the college's administration to monitor salary differences between male and female faculty members.
+
+
+#Descriptive Stats
+```{r}
+library(carData)
+#View(Salaries)
+
+#Rank  Prof, AssocPRoc, Asst
+#A- theoretical B - Applies
+#years since phd
+#years of service
+#gender
+#salary = updated to salary in 2022
+head(Salaries)
+```
+
+```{r}
+summary(Salaries$rank)
+summary(Salaries$discipline)
+summary(Salaries$yrs.since.phd)
+summary(Salaries$yrs.service)
+summary(Salaries$sex)
+```
+
+
+
+
+Now lets adjust for inflation
+
+```{r}
+#Accounted for inflation since 2009
+#AIER.org - cost of living calculator
+Salaries[,6] <- Salaries[,6]*1.35
+
+
+summary(Salaries$salary)
+
+head(Salaries)
+```
+
+Now making full model with no interaction
+
+```{r}
+full_model <- lm(salary~. , data=Salaries)
+summary(full_model)
+
+```
+
+Lets check what is the best model
+
+```{r}
+olsrr_all <- olsrr::ols_step_all_possible(full_model)
+#Best based off of R squared
+(olsrr_all[which.max(olsrr_all$rsquare),])
+
+#Best based off of Adj R squared
+(olsrr_all[which.max(olsrr_all$adjr),])
+
+
+#Best based off of Mallows CP
+(olsrr_all[which.min(olsrr_all$cp),])
+
+
+olsrr::ols_step_both_aic(full_model)
+```
+
+confirmed that full model is the best model according to adj r squared and we don't want to take out sex because that is important factor
+
+#Now recoding Salaries so that it includes everything as factor
+
+
+```{r}
+Salaries2 <- Salaries
+Salaries2 <- cbind(Salaries2, Salaries$rank)
+
+library(dplyr)
+
+Salaries2$rank <- recode_factor(Salaries2$rank, "AssocProf" = 0, "AsstProf"= 1,"Prof"= 0)
+Salaries2$`Salaries$rank` <-  recode_factor(Salaries2$`Salaries$rank`, "AssocProf" = 0, "Prof"= 1,"AsstProf"= 0)
+Salaries2$sex <- recode_factor(Salaries2$sex, "Male"=0, "Female" = 1)
+Salaries2$discipline <- recode_factor(Salaries2$discipline, "A"=0, "B" = 1)
+
+Salaries2 <- Salaries2[, c(1,7,2,3,4,5,6)]
+
+names(Salaries2)[2] <- "FRank"
+
+head(Salaries2)
+```
+
+#initial model
+
+This model will include an interaction term
+
+```{r}
+full <- lm(salary~ discipline*rank + discipline*Salaries2$FRank +yrs.service + sex + yrs.since.phd, data= Salaries2)
+summary(full)
+```
+
+no scaling needed
+
+
+
+#Altering first model
+
+```{r}
+#NORMALITY
+car::qqPlot(full, id = TRUE, col.lines = "blue", 
+            reps = 1000, ylab = "Ordered R-Student Residuals", pch = 16)
+```
+
+```{r}
+
+r_stud <- rstudent(full)
+
+hist(r_stud, prob = TRUE, breaks = 40, xlab = "R-Student Residuals", main = "")
+lines(density(r_stud, adjust = 2), col = 4, lwd = 2)
+```
+
+```{r}
+#could not do boxplot for best mod
+carPT<-car::powerTransform(full, family = "bcPower")
+summary(carPT)
+
+#no transformation
+```
+In summary for normality we do not need to adjust anything
+
+
+```{r}
+#NON CONSTANT VARIANCE
+car::spreadLevelPlot(full, smooth = FALSE)
+#slope is not close to one
+```
+```{r}
+car::ncvTest(full)
+#therefore not a constant variance
+```
+
+We infact do need to change our model! 
+for a lambda > 1 the suggestion is -2 but -3 produces better results
+
+Now checking and furthering results with transformed model
+
+```{r}
+full_transformed <- lm((salary)^(-3)~ discipline*rank + discipline*Salaries2$FRank +yrs.service + sex + yrs.since.phd, data= Salaries2)
+summary(full_transformed)
+```
+
+Checking to make sure what we already checked is still good
+
+```{r}
+car::spreadLevelPlot(full_transformed, smooth = FALSE)
+
+r_stud <- rstudent(full_transformed)
+
+hist(r_stud, prob = TRUE, breaks = 40, xlab = "R-Student Residuals", main = "")
+lines(density(r_stud, adjust = 2), col = 4, lwd = 2)
+
+carPT<-car::powerTransform(full, family = "bcPower")
+summary(carPT)
+
+#no transformation
+```
+
+and we are still good so lets continue
+
+
+```{r}
+#NON LINEARITY
+#we can only check this using a model with no interaction... 
+#so we do that and we are looking good as expected
+car::crPlots(full_model, ylab = "partial residual", grid = FALSE, main = "")
+#car::crPlots(full_transformed, ylab = "partial residual", grid = FALSE, main = "")
+```
+
+```{r}
+#Collinearity
+
+(vif_all <- car::vif(full_transformed))
+#none are greater than 10 so we are good! 
+```
+
+Checking for multicollinearity
+
+```{r}
+pairs(Salaries2[,c(-1, -2, -3, -6, -7)])
+
+```
+as expected yrs.since.phd and yrs.service are extremely correlated. Only way they wouldn't be is as if a professor changed universities
+So we will delete yrs.since.phd because yrs.service at a specific university will explain raises which explains salary
+
+```{r}
+full_transformed_No_years <- lm((salary)^(-3)~ discipline*rank + discipline*FRank +yrs.service + sex , data= Salaries2)
+summary(full_transformed_No_years)
+#taking out years since phd
+```
+
+```{r}
+#Collinearity
+
+(vif_all <- car::vif(full_transformed_No_years))
+#non are greater than 10 so we are good! 
+```
+
+
+#Now checking unusual data
+
+
+
+```{r}
+#all influential points
+summary(influence.measures(full_transformed_No_years))
+
+```
+
+That is alot! Lets take out all of those that are flagged not by cov.r  or flagged by 2 or more
+
+```{r}
+
+Salaries_noIP <- Salaries2[c(-65,-124,-132,-195, -232, -238, -283, -286, -299, -317, -318, -228, -368),]
+noinfluential <- lm((salary)^(-3)~ discipline*rank + discipline*FRank +yrs.service + sex , data= Salaries_noIP)
+summary(noinfluential)
+```
+
+This looks good! But is there any more influential points?
+
+```{r}
+#all influential points
+summary(influence.measures(noinfluential))
+
+```
+
+
+And there is even more soooooo... we are not gonna take nay more out because when we tried (aka whats below) it did not help
+
+```{r}
+# p <- 7
+# n <- length(Salaries_noIP[,1])
+# covra <- covratio(noinfluential)
+# covra[covra > (1 + 3*p/n) ]
+# covra[covra < (1 - 3*p/n)]
+```
+
+```{r}
+#Salaries3 <- Salaries_noIP[c(-10,-25,-35,-36,-64,-85,-104,-105,-107,-108,-109,-112,-113,-115,-119,-120,-128,-130,-131,-133,-134,-142,-154,-187,-189,-219,-234,-254,-255,-256,-259,-261,-273,-274,-275,-285,-290,-309,-335,-342,-359,-362,-364,-371,-377,-378,-381,-383,-50,-65,-70,-74,-126,-173,-236,-239,-245,-365),]
+```
+
+```{r}
+#noinfluential2 <- lm((salary)^(-2)~ discipline*rank + discipline*Salaries5$FRank +yrs.service + sex , data= Salaries3)
+#summary(noinfluential2)
+```
+
+last minute lets add one more interaction term
+```{r}
+interact <- lm((salary)^(-3)~ discipline*rank + discipline*FRank +yrs.service*rank + yrs.service*FRank + sex , data= Salaries_noIP)
+summary(interact)
+```
+
+#Checking to see if potential final model doesn't need any more transformations
+
+```{r}
+car::qqPlot(interact, id = TRUE, col.lines = "blue", 
+            reps = 1000, ylab = "Ordered R-Student Residuals", pch = 16)
+```
+
+```{r}
+
+r_stud <- rstudent(interact)
+
+hist(r_stud, prob = TRUE, breaks = 10, xlab = "R-Student Residuals", main = "")
+lines(density(r_stud, adjust = 2), col = 4, lwd = 2)
+```
+
+```{r}
+#could not do boxplot for best mod
+carPT<-car::powerTransform(interact, family = "bcPower")
+summary(carPT)
+
+#no transformation
+```
+
+
+
+```{r}
+#NON CONSTANT VARIANCE
+car::spreadLevelPlot(interact, smooth = FALSE)
+#slope is not close to one
+```
+```{r}
+car::ncvTest(interact)
+#therefore not a constant variance
+```
+
+
+
+
+
+
+```{r}
+#Collinearity
+
+(vif_all <- car::vif(interact))
+#non are greater than 10 so we are good! 
+```
+Looks good we will claim noinfluential as final model
+
+```{r}
+final_mod <- interact
+summary(final_mod)
+```
+
+
+#Prediction
+
+
+```{r}
+yu <- data.frame(rank =as.factor(1), FRank = as.factor(0),  discipline = as.factor(1), yrs.since.phd = 4, yrs.service = 2, sex = as.factor(0))
+
+
+
+#Transforming the response back to original
+(predict(final_mod, newdata=yu))^(2/3)/predict(final_mod, newdata=yu)
+
+(predict(final_mod, newdata=yu, interval="confidence", level = .95))^(2/3)/predict(final_mod, newdata=yu, interval="confidence", level = .95)
+```
+
+
+asst 10
+prof 01
+assoc 00
+
+Research on Professors
+
+clough -> prof 1985 - 37, 37 years, female
+
+
+spiller -> assoc prof, 2005 - 17, 14
+
+sander -> prof, 2004- 18, 7 years
+
+rowe -> prof, 1998- 24, 2014 - 8 (changed schools)
+
+ongie -> asst prof, 2016 - 6, 2020 - 2
+
+maadooliat -> assoc prof, 2011 - 11, 2013 - 9
+
+hamilton -> assoc prof, 2012 - 10, 2014 - 8
+
+pantone -> asst prof
+ruitenburg -> prof
+hamedani -> prof
+bansal -> prof
+
+```{r}
+changediscipline <- 0
+
+yu <- data.frame(rank =as.factor(1), FRank = as.factor(0),  discipline = as.factor(changediscipline), yrs.since.phd = 4, yrs.service = 2, sex = as.factor(0))
+
+clough <- data.frame(rank =as.factor(0), FRank = as.factor(1),  discipline = as.factor(changediscipline), yrs.since.phd = 37, yrs.service = 37, sex = as.factor(1))
+
+
+spiller <- data.frame(rank =as.factor(0), FRank = as.factor(0),  discipline = as.factor(changediscipline), yrs.since.phd = 17, yrs.service = 14, sex = as.factor(1))
+
+
+sander <- data.frame(rank =as.factor(0), FRank = as.factor(1),  discipline = as.factor(changediscipline), yrs.since.phd = 18, yrs.service = 7, sex = as.factor(1))
+
+
+rowe <- data.frame(rank =as.factor(0), FRank = as.factor(1),  discipline = as.factor(changediscipline), yrs.since.phd = 24, yrs.service = 8, sex = as.factor(0))
+
+
+ongie <- data.frame(rank =as.factor(1), FRank = as.factor(0),  discipline = as.factor(changediscipline), yrs.since.phd = 6, yrs.service = 2, sex = as.factor(0))
+
+
+maadooliat <- data.frame(rank =as.factor(0), FRank = as.factor(0),  discipline = as.factor(changediscipline), yrs.since.phd = 11, yrs.service = 9, sex = as.factor(0))
+
+
+hamilton <- data.frame(rank =as.factor(0), FRank = as.factor(0),  discipline = as.factor(changediscipline), yrs.since.phd = 10, yrs.service = 8, sex = as.factor(1))
+
+```
+
+```{r}
+professors <- rbind(yu, clough, hamilton, ongie, maadooliat, rowe, sander, spiller)
+professor_predict <- (predict(final_mod, newdata=professors, interval="confidence", level = .95))^(2/3)/predict(final_mod, newdata=professors, interval="confidence", level = .95)
+
+professornames <- cbind(c("Yu", "Clough", "Hamilton", "Ongie", "Maadooliat", "Rowe", "Sanders", "Spiller"), professors, professor_predict)
+
+names(professornames)[1] <- "Professor"
+names(professornames)[2] <- "Rank = Asst Prof"
+names(professornames)[3] <- "Rank = Full Prof"
+names(professornames)[7] <- "Gender = Male"
+names(professornames)[9] <- "Upper"
+names(professornames)[10] <- "Lower"
+
+professornames <- professornames[, c(1,2,3,4,5,6,7,8,10,9)]
+
+professornames
+```
+Ongie said "close but 112 was too high"
+
+
+
+
